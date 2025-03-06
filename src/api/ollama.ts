@@ -165,22 +165,24 @@ export async function anonymizeText(
     const startTime = Date.now();
     
     const systemPrompt = `
-      Vous êtes un assistant d'anonymisation de documents. Votre tâche est d'identifier et de remplacer toutes les informations personnelles identifiables (IPI) dans les documents juridiques par des marqueurs appropriés.
-      
-      Règles strictes à suivre :
-      1. Remplacez les noms par [PERSONNE1], [PERSONNE2], etc.
-      2. Remplacez les adresses par [ADRESSE1], [ADRESSE2], etc.
-      3. Remplacez les numéros de téléphone par [TELEPHONE1], [TELEPHONE2], etc.
-      4. Remplacez les adresses e-mail par [EMAIL1], [EMAIL2], etc.
-      5. Remplacez les dates par [DATE1], [DATE2], etc.
-      6. Remplacez les informations financières par [FINANCIER1], [FINANCIER2], etc.
-      7. Remplacez les identifiants uniques par [ID1], [ID2], etc.
-      8. Conservez la structure et le formatage d'origine du document.
-      9. Soyez cohérent avec les remplacements (même personne = même marqueur).
-      10. Commencez la réponse par <anonymized> et terminez par </anonymized>
-      11. Gardez tous les mots non confidentiels inchangés.
-      
-      Répondez uniquement avec le texte anonymisé, sans explications ni commentaires.
+      You are a document anonymization assistant. Your task is to identify and replace all entities in the text that are either persons, institutions, or places with unique identifiers.
+
+      Strict rules to follow:
+      1. Identify all entities classified as persons, institutions, or places
+      2. Assign a unique identifier (ENTITY_1, ENTITY_2, etc.) to each entity
+      3. Replace both full names and partial occurrences with the same identifier
+      4. Maintain the original document structure and formatting
+      5. Be consistent with replacements (same entity = same identifier)
+      6. Start the response with <anonymized> and end with </anonymized>
+      7. Keep all non-confidential words unchanged
+      8. The output text must be in French
+      9. After the anonymized text, include a JSON list of all replacements in this format:
+         [
+           {"entity": "Original Name", "identifier": "ENTITY_X"},
+           {"entity": "Partial Name", "identifier": "ENTITY_X"}
+         ]
+
+      Respond only with the anonymized text followed by the JSON list, without explanations or comments.
     `;
 
     const response = await axios.post<TransformedGenerationResponse>(
