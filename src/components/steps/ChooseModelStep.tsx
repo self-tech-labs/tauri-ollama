@@ -2,39 +2,92 @@ import React, { useEffect, useState } from 'react';
 import { Box, Heading, Text, Button, Spinner, Stack } from '@chakra-ui/react';
 import { Radio, RadioGroup } from '../../components/ui/radio';
 import { useTutorial } from '../../context/TutorialContext';
-import { listModels } from '../../api/ollama';
+import { listModels, OLLAMA_API_URL } from '../../api/ollama';
+import axios from 'axios';
 
 // Define the available models
 const AVAILABLE_MODELS = [
   {
-    id: 'llama3:8b',
-    name: 'Llama 3 8B',
+    id: 'llama3.1',
+    name: 'Llama 3.1 8B',
     size: '4.7 GB',
     quantization: 'Q4_0',
     description: 'Un modèle léger adapté à la plupart des systèmes avec au moins 8 Go de RAM.'
   },
   {
-    id: 'llama3:8b-instruct',
-    name: 'Llama 3 8B Instruct',
+    id: 'llama3.1:instruct',
+    name: 'Llama 3.1 8B Instruct',
     size: '4.7 GB',
     quantization: 'Q4_0',
-    description: 'Version instruite de Llama 3 8B, optimisée pour suivre les instructions.'
+    description: 'Version instruite de Llama 3.1 8B, optimisée pour suivre les instructions.'
   },
   {
-    id: 'mistral:7b-instruct-v0.2',
-    name: 'Mistral 7B Instruct',
+    id: 'mistral',
+    name: 'Mistral 7B',
     size: '4.1 GB',
     quantization: 'Q4_0',
-    description: 'Un modèle puissant suivant les instructions avec de bonnes performances pour le traitement des documents.'
+    description: 'Un modèle puissant avec de bonnes performances pour le traitement des documents.'
+  },
+  {
+    id: 'phi4-mini',
+    name: 'Phi 4 Mini',
+    size: '2.5 GB',
+    quantization: 'Q4_0',
+    description: 'Le modèle Phi-4 Mini de Microsoft, excellent pour les systèmes à faibles ressources.'
+  },
+  {
+    id: 'llama3.2',
+    name: 'Llama 3.2',
+    size: '2.0 GB',
+    quantization: 'Q4_0',
+    description: 'Version légère et récente de Llama 3.2, idéale pour les systèmes à ressources limitées.'
+  },
+  {
+    id: 'llama3:8b',
+    name: 'Llama 3 8B',
+    size: '4.7 GB',
+    quantization: 'Q4_0',
+    description: 'Modèle Llama 3 original, bon équilibre entre performance et taille.'
   },
   {
     id: 'phi3:mini',
-    name: 'Phi-3 Mini',
-    size: '1.8 GB',
+    name: 'Phi 3 Mini',
+    size: '2.2 GB',
     quantization: 'Q4_0',
-    description: 'Le plus petit modèle Phi-3 de Microsoft, excellent pour les systèmes à faibles ressources.'
+    description: 'Version compacte du modèle Phi 3, efficace pour les tâches d\'anonymisation.'
+  },
+  {
+    id: 'llama3',
+    name: 'Llama 3',
+    size: '4.7 GB',
+    quantization: 'Q4_0',
+    description: 'Modèle Llama 3 standard, polyvalent pour diverses tâches de traitement de texte.'
+  },
+  {
+    id: 'initium/law_model',
+    name: 'Initium Law Model',
+    size: '4.1 GB',
+    quantization: 'Q4_0',
+    description: 'Modèle spécialisé pour le traitement de textes juridiques et l\'anonymisation de documents légaux.'
   }
 ];
+
+// Function to verify if a model name is valid
+export async function verifyModelName(modelName: string): Promise<boolean> {
+  try {
+    // Make a request to check if the model exists in the Ollama registry
+    // First try to pull the model manifest to check if it exists
+    const response = await axios.post(`${OLLAMA_API_URL}/pull`, {
+      name: modelName,
+      stream: false
+    });
+    return response.status === 200;
+  } catch (error) {
+    // If we get an error, the model doesn't exist or can't be pulled
+    console.error(`Error verifying model ${modelName}:`, error);
+    return false;
+  }
+}
 
 const ChooseModelStep: React.FC = () => {
   const { nextStep, systemInfo, setSelectedModel, setAvailableModels } = useTutorial();
@@ -73,7 +126,7 @@ const ChooseModelStep: React.FC = () => {
           }
         } else {
           // Otherwise, select the smallest model by default
-          const smallestModel = AVAILABLE_MODELS.find(m => m.id === 'phi3:mini');
+          const smallestModel = AVAILABLE_MODELS.find(m => m.id === 'phi4-mini');
           if (smallestModel) {
             setSelectedModelId(smallestModel.id);
             setSelectedModel({

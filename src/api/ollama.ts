@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const OLLAMA_API_URL = 'http://localhost:11434/api';
+export const OLLAMA_API_URL = 'http://localhost:11434/api';
 
 // Interface for model information
 export interface OllamaModel {
@@ -74,6 +74,14 @@ interface TransformedGenerationResponse {
   };
 }
 
+// Add these specific marker types to improve consistency
+const MARKER_TYPES = {
+  PERSON: 'PERSONNE',
+  LOCATION: 'LIEU',
+  ORGANIZATION: 'ORGANISATION',
+  FINANCIAL: 'MONTANT'
+} as const;
+
 // Function to list available models
 export async function listModels(): Promise<OllamaModel[]> {
   try {
@@ -101,53 +109,116 @@ export async function downloadModel(modelName: string, onProgress?: (progress: n
   try {
     onProgress?.(0);
     
-    // Start the download
-    const downloadPromise = axios.post(`${OLLAMA_API_URL}/pull`, {
-      name: modelName,
-    }, {
-      // Set a longer timeout since downloads can take a while
-      timeout: 3600000 // 1 hour
-    });
-
-    // Initialize progress tracking
-    let lastProgress = 0;
-    let isCompleted = false;
-
-    // Progress checking function
-    const checkProgress = async () => {
-      if (isCompleted) return;
-
-      try {
-        const models = await listModels();
-        const model = models.find(m => m.name === modelName);
-        
-        if (model) {
-          isCompleted = true;
-          onProgress?.(100);
-        } else {
-          // Increment progress slowly to show activity
-          lastProgress = Math.min(90, lastProgress + 5); // Cap at 90% until complete
-          onProgress?.(lastProgress);
-          
-          // Continue polling
-          setTimeout(checkProgress, 2000);
-        }
-      } catch (error) {
-        console.error('Error checking download progress:', error);
-        // Continue polling even on error
-        setTimeout(checkProgress, 2000);
-      }
-    };
-
-    // Start progress polling
-    checkProgress();
-
-    // Wait for download to complete
-    const response = await downloadPromise;
-    isCompleted = true;
-    onProgress?.(100);
+    // First check if the model is already downloaded
+    const alreadyDownloaded = await isModelDownloaded(modelName);
+    if (alreadyDownloaded) {
+      onProgress?.(100);
+      return true;
+    }
     
-    return response.status === 200;
+    // Create a controller to abort the request if needed
+    const controller = new AbortController();
+    const signal = controller.signal;
+    
+    // Make the request with raw response type to handle streaming
+    console.log(`Starting download of model: ${modelName}`);
+    const response = await fetch(`${OLLAMA_API_URL}/pull`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: modelName }),
+      signal,
+    });
+    
+    if (!response.ok) {
+      console.error(`Failed to start download: ${response.status} ${response.statusText}`);
+      throw new Error(`Failed to start download: ${response.statusText}`);
+    }
+    
+    if (!response.body) {
+      console.error('Response body is null');
+      throw new Error('Response body is null');
+    }
+    
+    // Set up a reader for the stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    
+    // Variables to track progress
+    let lastProgressUpdate = Date.now();
+    let progressCounter = 0;
+    
+    // Process the stream
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        console.log('Download stream completed');
+        break;
+      }
+      
+      // Process the chunk
+      const chunk = decoder.decode(value, { stream: true });
+      console.log('Received chunk:', chunk.substring(0, 100) + (chunk.length > 100 ? '...' : ''));
+      
+      const lines = chunk.split('\n').filter(line => line.trim());
+      
+      for (const line of lines) {
+        try {
+          const data = JSON.parse(line);
+          console.log('Parsed data:', data);
+          
+          // Check for progress information
+          if (data.status === 'downloading') {
+            if (data.completed !== undefined && data.total !== undefined) {
+              const progress = Math.round((data.completed / data.total) * 100);
+              onProgress?.(progress);
+              console.log(`Download progress: ${progress}%`);
+            } else {
+              // If we don't have completed/total, update progress periodically
+              const now = Date.now();
+              if (now - lastProgressUpdate > 1000) { // Update every second
+                progressCounter = Math.min(95, progressCounter + 5);
+                onProgress?.(progressCounter);
+                lastProgressUpdate = now;
+                console.log(`Estimated progress: ${progressCounter}%`);
+              }
+            }
+          }
+          
+          // Check for completion
+          if (data.status === 'success') {
+            console.log('Download completed successfully');
+            onProgress?.(100);
+            return true;
+          }
+          
+          // Check for errors
+          if (data.error) {
+            console.error('Error in download response:', data.error);
+            throw new Error(data.error);
+          }
+        } catch (e) {
+          // Only log if it's not a JSON parse error for incomplete lines
+          if (line.trim().length > 0 && line.trim() !== '{' && !line.includes('}')) {
+            console.warn('Failed to parse line:', line, e);
+          }
+        }
+      }
+    }
+    
+    // Verify the model was downloaded successfully
+    console.log('Verifying model download...');
+    const isDownloaded = await isModelDownloaded(modelName);
+    if (isDownloaded) {
+      console.log('Model verified as downloaded');
+      onProgress?.(100);
+      return true;
+    }
+    
+    console.log('Model verification failed');
+    return false;
   } catch (error) {
     console.error('Error downloading model:', error);
     return false;
@@ -165,25 +236,17 @@ export async function anonymizeText(
     const startTime = Date.now();
     
     const systemPrompt = `
-      You are a document anonymization assistant. Your task is to identify and replace all entities in the text that are either persons, institutions, or places with unique identifiers.
+You are an anonymization assistant. Replace all sensitive entities in the text with identifiers.
 
-      Strict rules to follow:
-      1. Identify all entities classified as persons, institutions, or places
-      2. Assign a unique identifier (ENTITY_1, ENTITY_2, etc.) to each entity
-      3. Replace both full names and partial occurrences with the same identifier
-      4. Maintain the original document structure and formatting
-      5. Be consistent with replacements (same entity = same identifier)
-      6. Start the response with <anonymized> and end with </anonymized>
-      7. Keep all non-confidential words unchanged
-      8. The output text must be in French
-      9. After the anonymized text, include a JSON list of all replacements in this format:
-         [
-           {"entity": "Original Name", "identifier": "ENTITY_X"},
-           {"entity": "Partial Name", "identifier": "ENTITY_X"}
-         ]
-
-      Respond only with the anonymized text followed by the JSON list, without explanations or comments.
-    `;
+Rules:
+1. Replace persons, institutions, and places with ENTITY_N (N=1,2,...)
+2. Use consistent identifiers (same entity gets same number)
+3. Keep document structure and non-sensitive text unchanged
+4. Output in French
+5. Start with <anonymized> and end with </anonymized>
+6. After text, list replacements as JSON:
+[{"entity": "Original", "identifier": "ENTITY_N"}]
+`;
 
     const response = await axios.post<TransformedGenerationResponse>(
       `${OLLAMA_API_URL}/generate`,
@@ -265,28 +328,38 @@ export async function anonymizeText(
   }
 }
 
-// Helper function to calculate confidence score based on various heuristics
+// Improve the confidence score calculation
 function calculateConfidenceScore(original: string, anonymized: string): number {
   let score = 1.0;
   
-  // Check if length is reasonably similar (allowing for marker replacements)
-  const lengthRatio = anonymized.length / original.length;
-  if (lengthRatio < 0.5 || lengthRatio > 2.0) {
-    score *= 0.7;
-  }
-  
-  // Check for presence of expected markers
-  const expectedMarkers = ['[PERSONNE', '[ADRESSE', '[DATE', '[FINANCIER'];
-  const hasMarkers = expectedMarkers.some(marker => anonymized.includes(marker));
-  if (!hasMarkers) {
+  // Check for required wrapper tags
+  if (!anonymized.startsWith('<anonymized>') || !anonymized.endsWith('</anonymized>')) {
     score *= 0.5;
   }
   
-  // Check for consistent formatting
-  const originalLines = original.split('\n').length;
-  const anonymizedLines = anonymized.split('\n').length;
-  if (originalLines !== anonymizedLines) {
-    score *= 0.8;
+  // Check for JSON replacements section
+  if (!anonymized.includes('"entities":')) {
+    score *= 0.6;
+  }
+  
+  // Check for proper French markers
+  const expectedMarkers = Object.values(MARKER_TYPES);
+  const markersFound = expectedMarkers.filter(marker => 
+    anonymized.includes(`[${marker}_`)
+  ).length;
+  score *= (markersFound / expectedMarkers.length) * 0.8 + 0.2;
+  
+  // Verify JSON structure
+  try {
+    const jsonStart = anonymized.lastIndexOf('{');
+    const jsonEnd = anonymized.lastIndexOf('}');
+    if (jsonStart > -1 && jsonEnd > -1) {
+      JSON.parse(anonymized.substring(jsonStart, jsonEnd + 1));
+    } else {
+      score *= 0.7;
+    }
+  } catch {
+    score *= 0.5;
   }
   
   return Math.max(0.1, score);
